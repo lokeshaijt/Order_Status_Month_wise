@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+# data files are not committed
+*.xlsx
+!templates/*.xlsx
+out/
