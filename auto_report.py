@@ -4,6 +4,7 @@
     python auto_report.py --dry-run       # build + send only to [alerts] error_to
     python auto_report.py --no-email      # build only
     python auto_report.py --date 20-11-2026 --force   # re-run / re-send a given day
+    python auto_report.py --source database   # override [input] source for one run
 
 Settings are read from config.ini (copy config.example.ini). The SMTP password is read from
 Windows Credential Manager (via `keyring`) or the O365_SMTP_PASSWORD environment variable.
@@ -27,6 +28,7 @@ sys.path.insert(0, str(HERE))
 
 from order_status_monthwise.__main__ import DEFAULT_TEMPLATE, date_from_name, recalc  # noqa: E402
 from order_status_monthwise.build import build  # noqa: E402
+from order_status_monthwise import nav_db  # noqa: E402
 
 XLSX_MIME = ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 log = logging.getLogger("auto_report")
@@ -130,7 +132,7 @@ def fmt(template, day, **extra):
 
 
 # ---------------------------------------------------------------- main run
-def run(cfg, day, dry_run=False, no_email=False, force=False):
+def run(cfg, day, dry_run=False, no_email=False, force=False, source=None):
     out_dir = Path(cfg["output"]["folder"])
     out_dir.mkdir(parents=True, exist_ok=True)
     marker = out_dir / f".sent_{day:%Y-%m-%d}"
@@ -138,7 +140,17 @@ def run(cfg, day, dry_run=False, no_email=False, force=False):
         log.info("Report for %s already sent (%s) - nothing to do. Use --force to resend.", day, marker)
         return
 
-    src = find_input(cfg, day)
+    source = (source or cfg["input"].get("source", "folder")).strip().lower()
+    if source == "database":
+        src = out_dir / f"ERP_from_DB_{day:%d-%m-%Y}.xlsx"
+        db_stats = nav_db.fetch_to_workbook(cfg, day, str(src))
+        log.info("Fetched from database: %s", db_stats)
+        if db_stats["orders"] == 0:
+            raise RuntimeError("The database query returned no orders - not sending an empty report.")
+    elif source == "folder":
+        src = find_input(cfg, day)
+    else:
+        raise ValueError(f"[input] source must be 'folder' or 'database', not {source!r}")
     log.info("Input: %s", src)
 
     out = out_dir / f"Order_Status_Monthwise_{day:%d-%m-%Y}.xlsx"
@@ -148,7 +160,7 @@ def run(cfg, day, dry_run=False, no_email=False, force=False):
     log.info("Built %s %s", out, stats)
 
     archive = cfg["input"].get("archive_folder", "").strip()
-    if archive:
+    if archive and source == "folder":
         Path(archive).mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, Path(archive) / src.name)
 
@@ -181,6 +193,8 @@ def main(argv=None):
     ap.add_argument("--no-email", action="store_true", help="build the report, do not send")
     ap.add_argument("--force", action="store_true", help="send even if already sent for this date")
     ap.add_argument("--set-password", action="store_true", help="store the SMTP password in Windows Credential Manager")
+    ap.add_argument("--set-db-password", action="store_true", help="store the SQL login password in Windows Credential Manager")
+    ap.add_argument("--source", choices=["folder", "database"], help="override [input] source for this run")
     a = ap.parse_args(argv)
 
     cfg = load_config(a.config)
@@ -191,11 +205,18 @@ def main(argv=None):
                              getpass.getpass(f"Password for {cfg['email']['sender']}: "))
         print("Saved in Windows Credential Manager.")
         return 0
+    if a.set_db_password:
+        import getpass
+        import keyring
+        user = cfg["database"]["username"]
+        keyring.set_password("order_status_db", user, getpass.getpass(f"SQL password for {user}: "))
+        print("Saved in Windows Credential Manager.")
+        return 0
 
     setup_logging(Path(cfg["output"].get("log_folder", str(HERE / "logs"))))
     day = dt.datetime.strptime(a.date, "%d-%m-%Y").date() if a.date else dt.date.today()
     try:
-        run(cfg, day, a.dry_run, a.no_email, a.force)
+        run(cfg, day, a.dry_run, a.no_email, a.force, a.source)
         return 0
     except Exception as exc:
         log.error("FAILED: %s\n%s", exc, traceback.format_exc())

@@ -61,3 +61,30 @@ Add `/D MON,TUE,WED,THU,FRI,SAT` with `/SC WEEKLY` instead to skip Sundays.
 - `run_report.bat --no-email` – build only
 - A report is mailed at most once per day (marker file `.sent_<date>` in the output folder).
 - Log: `logs\auto_report.log`.
+
+## Fetching directly from the NAV database (instead of the shared folder)
+
+Set `[input] source = database` in `config.ini`. The script then runs `nav_query.sql` on the NAV
+SQL Server (read-only), writes the rows in the same layout as the ERP export
+(`out\ERP_from_DB_<date>.xlsx`, kept for audit) and formats/mails it as usual.
+If the query returns no orders, nothing is sent and the error e-mail goes out.
+
+### One-time setup on the Windows server
+1. Install **Microsoft ODBC Driver 18 for SQL Server** (download from Microsoft).
+2. `.venv\Scripts\pip install -r requirements-server.txt`
+3. In `config.ini` → `[database]`: `server` (host, or `host,port`, or `HOST\INSTANCE`), `username`,
+   `auth = sql`. If you do not know the database name yet, put `database = master`.
+4. Store the password (never in config.ini or chat):
+   `.venv\Scripts\python auto_report.py --set-db-password`
+5. Find the database, company and tables:
+   `.venv\Scripts\python -m order_status_monthwise.nav_db --discover`
+   → fill in `database` and `company`, run `--discover` again to list the Sales Header/Line columns.
+6. Complete the `TODO` fields in `nav_query.sql` (Ord Id, stock in process, ready stock,
+   CAN PACK, planned weeks are custom NAV fields – your NAV partner can tell you which table/field
+   the Order Status report uses).
+7. Check against a real ERP export of the **same day** until it says MATCH:
+   `.venv\Scripts\python -m order_status_monthwise.nav_db --compare "OrderStatusRep-CBE_RODTEP-_CBE_EXP_20.11.2026.xlsx"`
+8. Test the full run: `run_report.bat --source database --dry-run`, then set `source = database`.
+
+The SQL login only needs **db_datareader** on the NAV database. The query uses `WITH (NOLOCK)`
+so it never blocks NAV users.
