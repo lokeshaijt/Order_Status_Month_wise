@@ -5,3 +5,5 @@ __pycache__/
 *.xlsx
 !templates/*.xlsx
 out/
+config.ini
+logs/
